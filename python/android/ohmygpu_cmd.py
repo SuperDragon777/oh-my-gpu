@@ -1,146 +1,69 @@
 import subprocess
 import re
 
-def get_gpu_info():
-    try:
-        result = subprocess.run(
-            ['dumpsys', 'meminfo'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            return parse_meminfo(result.stdout)
-    except:
-        pass
-    
-    try:
-        result = subprocess.run(
-            ['cat', '/proc/meminfo'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            return parse_proc_meminfo(result.stdout)
-    except:
-        pass
-    
-    return None
 
-def parse_meminfo(output):
-    lines = output.split('\n')
-    total_memory = None
-    used_memory = None
-    
-    for line in lines:
-        if 'Total' in line:
-            match = re.search(r'(\d+)', line)
-            if match:
-                mb_value = int(match.group(1))
-                if mb_value > 100:
-                    total_memory = f"{mb_value} MB"
-                else:
-                    total_memory = f"{mb_value * 1024} MB"
-        
-        if 'Used' in line and 'Total' not in line:
-            match = re.search(r'(\d+)', line)
-            if match:
-                mb_value = int(match.group(1))
-                if mb_value < 500:
-                    used_memory = f"{mb_value * 1024} MB"
-                else:
-                    used_memory = f"{mb_value} MB"
-    
-    gpu_name = get_gpu_name()
-    
-    return {
-        'name': gpu_name,
-        'total_memory': total_memory or 'N/A',
-        'used_memory': used_memory or 'N/A',
-        'utilization': 'N/A'
-    }
-
-def parse_proc_meminfo(output):
-    lines = output.split('\n')
-    mem_total = None
-    mem_used = None
-    
-    for line in lines:
-        if line.startswith('MemTotal:'):
-            match = re.search(r'(\d+)', line)
-            if match:
-                kb_value = int(match.group(1))
-                mem_total = f"{kb_value // 1024} MB"
-        
-        if line.startswith('MemAvailable:'):
-            match = re.search(r'(\d+)', line)
-            if match:
-                available_kb = int(match.group(1))
-                total_kb = 0
-                for l in lines:
-                    if l.startswith('MemTotal:'):
-                        total_kb = int(re.search(r'(\d+)', l).group(1))
-                        break
-                
-                if total_kb > 0:
-                    used_kb = total_kb - available_kb
-                    mem_used = f"{used_kb // 1024} MB"
-    
-    gpu_name = get_gpu_name()
-    
-    return {
-        'name': gpu_name,
-        'total_memory': mem_total or 'N/A',
-        'used_memory': mem_used or 'N/A',
-        'utilization': 'N/A'
-    }
-
-def get_gpu_name():
-    try:
-        result = subprocess.run(
-            ['getprop', 'ro.board.platform'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            platform_name = result.stdout.strip()
-            if platform_name:
-                return f"Android GPU - {platform_name}"
-    except:
-        pass
+def get_processor_name():
+    for prop in ('ro.chipname', 'ro.hardware'):
+        try:
+            result = subprocess.run(
+                ['getprop', prop],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False
+            )
+            if result.returncode == 0 and (processor := result.stdout.strip()):
+                return processor
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
     
     try:
-        result = subprocess.run(
-            ['getprop', 'ro.hardware'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            hardware = result.stdout.strip()
-            if hardware:
-                return f"Android GPU - {hardware}"
-    except:
+        with open('/proc/cpuinfo', 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if 'Hardware' in line or 'Processor' in line:
+                    if ':' in line:
+                        return line.split(':', 1)[1].strip()
+    except (FileNotFoundError, OSError, IOError):
         pass
     
-    return "Android GPU"
+    return "Unknown Processor"
+
+
+def get_memory_info():
+    mem_data = {}
+    
+    try:
+        with open('/proc/meminfo', 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                key, _, value = line.partition(':')
+                if key in ('MemTotal', 'MemAvailable'):
+                    # Извлечь числовое значение и преобразовать в МБ
+                    match = re.search(r'(\d+)', value)
+                    if match:
+                        mem_data[key] = int(match.group(1)) // 1024
+    except (FileNotFoundError, OSError, IOError):
+        return {'total': 'N/A', 'used': 'N/A'}
+    
+    if 'MemTotal' in mem_data and 'MemAvailable' in mem_data:
+        mem_used = mem_data['MemTotal'] - mem_data['MemAvailable']
+        return {
+            'total': f"{mem_data['MemTotal']} MB",
+            'used': f"{mem_used} MB"
+        }
+    
+    return {'total': 'N/A', 'used': 'N/A'}
+
 
 def print_gpu_info():
+    processor = get_processor_name()
+    memory = get_memory_info()
+    
     print("\nOH MY GPU:\n")
-    
-    gpu_info = get_gpu_info()
-    
-    if gpu_info:
-        print(f"GPU model:      {gpu_info['name']}")
-        print(f"Total memory:   {gpu_info['total_memory']}")
-        print(f"Used memory:    {gpu_info['used_memory']}")
-        print(f"Utilization:    {gpu_info['utilization']}")
-        print("\nGPU is fine.")
-    else:
-        print("[ERROR] GPU not found!")
-        print("[ERROR] Make sure device is properly configured.")
+    print(f"Processor:      {processor}")
+    print(f"Total memory:   {memory['total']}")
+    print(f"Used memory:    {memory['used']}")
+    print(f"Utilization:    N/A")
+    print("\nGPU is fine.")
 
 
 if __name__ == "__main__":
